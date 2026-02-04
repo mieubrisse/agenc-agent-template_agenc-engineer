@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(~/.agenc/claude/CLAUDE.md)",
+      "Read(~/.agenc/claude/settings.json)",
+      "Bash(agenc template ls)"
+    ]
+  }
+}
