@@ -154,36 +154,9 @@ Do not wait for the user to think of every permission the agent will need. Based
 
 ### Security review of settings.json
 
-Every `.claude/settings.json` file you create or review is a security boundary. A misconfigured permissions file can allow an agent to access sensitive data, exfiltrate information, or modify files it should never touch. **Treat every `settings.json` as security-critical and review it with the same rigor you would apply to a firewall rule set.**
+The `settings.json` is one layer in a broader permission model — not the sole security boundary. However, a misconfigured entry can still grant an agent access it should not have. When creating or reviewing a `settings.json`, scan the entries that exist for potential problems. Your job is to flag issues in what's present, not to prescribe what should be added.
 
-When creating or reviewing a `settings.json`, run through the following **Security Verification Checklist**. Flag every issue you find to the user with a clear explanation of the risk and a recommended fix.
-
-**Security Verification Checklist for settings.json:**
-
-- [ ] **File write scope is narrowly targeted.** Write permissions must be scoped to the specific directories the agent needs to modify (e.g., `workspace/` or a specific project subdirectory). Flag overly broad write paths such as `~`, `/`, `/Users`, `/home`, or any path that grants write access outside the agent's working area. Every write permission must map to a specific task the agent performs.
-
-- [ ] **Sensitive paths are explicitly denied.** Verify that deny rules exist for sensitive file patterns regardless of what write permissions are granted. At minimum, the following must be denied: `.env`, `.env.*`, `secrets/`, `credentials/`, `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `*.p12`, and any other credential or secret file patterns relevant to the agent's domain. If the global config already denies these paths, confirm the agent-specific config does not inadvertently override those denials with broader allow rules.
-
-- [ ] **Binary access is justified by the agent's role.** Every binary the agent is granted access to must have a clear, documented reason tied to the agent's tasks. Flag the following binaries as requiring explicit justification — they are not inherently dangerous, but they have security implications that demand scrutiny:
-  - **Network-capable binaries** (`curl`, `wget`, `nc`, `nmap`, `ssh`, `scp`, `rsync`, `ftp`) — Could be used for data exfiltration or unauthorized network access. Only grant if the agent's role requires network operations, and document the specific use case.
-  - **Privilege escalation binaries** (`sudo`, `su`, `doas`, `pkexec`) — Should almost never be granted. Flag as high-risk and require the user to explicitly confirm with a stated reason.
-  - **Arbitrary code execution binaries** (`eval`, `exec`, `xargs` with command execution, scripting interpreters beyond what the agent needs) — Could be used to bypass other permission restrictions.
-  - **File transfer and archival binaries** (`tar`, `zip`, `base64`, `openssl`) — In combination with network access, these enable data exfiltration. Justify each independently.
-  - **System inspection binaries** (`ps`, `env`, `printenv`, `whoami`, `id`, `mount`) — Can leak information about the host environment. Only grant if the agent needs system-level awareness for its role.
-
-- [ ] **Hooks do not execute unchecked external commands.** Review every hook (pre-tool-use, post-tool-use) to verify it does not execute arbitrary or user-supplied input as a command. Hooks should run fixed, known scripts — not dynamically constructed commands. Flag any hook that: pipes tool output into a shell, uses `eval` or `sh -c` with variable interpolation, downloads and executes remote scripts, or references scripts outside the template repository without a clear reason.
-
-- [ ] **Network access rules are appropriately scoped.** If the `settings.json` includes network access configuration (allowed hosts, allowed domains), verify the list is limited to the specific services the agent needs. Flag wildcard domains, overly broad CIDR ranges, or "allow all" network rules. An agent that writes Go code does not need unrestricted internet access — it may need access to `proxy.golang.org` and `pkg.go.dev`, but not `*`.
-
-- [ ] **No permission combination enables credential harvesting.** Review the complete set of permissions as a whole — not just individual entries. A combination of file read access to home directories + network access + `curl` could allow an agent to read SSH keys and exfiltrate them, even if no single permission looks dangerous in isolation. Evaluate permission sets for dangerous combinations:
-  - Read access to `~` or `~/.*` + any network-capable binary = potential credential exfiltration
-  - Write access to `~/.ssh/` or `~/.config/` = potential persistent backdoor installation
-  - Read access to browser profile directories + network access = potential cookie/session theft
-  - Access to `git` + write access to `~/.gitconfig` = potential credential redirect
-
-- [ ] **No permission grants broader access than the global config intends.** Compare the agent-specific `settings.json` against the global `~/.agenc/claude/settings.json`. If the global config denies a path or binary, the agent-specific config must not override that denial unless the user explicitly requests it and provides a justification. Flag any agent-specific permission that contradicts a global restriction.
-
-When you find a security issue, present it to the user in this format:
+When you spot an issue, flag it to the user with a clear explanation of the risk and a recommended fix. Use this format:
 
 ```
 SECURITY FLAG: <brief description>
@@ -193,6 +166,29 @@ Recommendation: <specific fix>
 ```
 
 Do not silently fix security issues. Always flag them explicitly so the user understands the risk and makes an informed decision. The user may have a legitimate reason for a broad permission — your job is to ensure they grant it consciously, not accidentally.
+
+**What to look for in existing entries:**
+
+- **Overly broad write paths.** If a write permission targets `~`, `/`, `/Users`, `/home`, or any path that grants write access well beyond the agent's working area, flag it. Write permissions should be scoped to the directories the agent actually needs to modify.
+
+- **Binaries with security implications that lack justification.** If the config grants access to any of the following, verify the agent's role justifies it:
+  - **Network-capable binaries** (`curl`, `wget`, `nc`, `nmap`, `ssh`, `scp`, `rsync`, `ftp`) — Could enable data exfiltration or unauthorized network access.
+  - **Privilege escalation binaries** (`sudo`, `su`, `doas`, `pkexec`) — Should almost never be granted. Flag as high-risk.
+  - **Arbitrary code execution binaries** (`eval`, `exec`, `xargs` with command execution, scripting interpreters beyond what the agent needs) — Could bypass other permission restrictions.
+  - **File transfer and archival binaries** (`tar`, `zip`, `base64`, `openssl`) — In combination with network access, these enable data exfiltration.
+  - **System inspection binaries** (`ps`, `env`, `printenv`, `whoami`, `id`, `mount`) — Can leak information about the host environment.
+
+- **Hooks that execute unchecked commands.** If a hook pipes tool output into a shell, uses `eval` or `sh -c` with variable interpolation, downloads and executes remote scripts, or references scripts outside the template repository without a clear reason — flag it. Hooks should run fixed, known scripts.
+
+- **Overly broad network access rules.** If the config includes allowed hosts or domains, check for wildcard domains, overly broad CIDR ranges, or "allow all" rules that go beyond what the agent's role requires.
+
+- **Dangerous permission combinations.** Individual entries can look reasonable in isolation but create risk together. Watch for:
+  - Read access to `~` or `~/.*` + any network-capable binary = potential credential exfiltration
+  - Write access to `~/.ssh/` or `~/.config/` = potential persistent backdoor installation
+  - Read access to browser profile directories + network access = potential cookie/session theft
+  - Access to `git` + write access to `~/.gitconfig` = potential credential redirect
+
+- **Entries that contradict the global config.** Compare against `~/.agenc/claude/settings.json`. If the global config denies a path or binary, an agent-specific entry that overrides that denial should be flagged unless the user explicitly requests it.
 
 
 Iterative Refinement
@@ -228,8 +224,8 @@ When creating a new agent template:
 4. **Initialize the repository** — Create the `agenc-agent-template_<name>` directory structure with the required and relevant optional files.
 5. **Craft the CLAUDE.md** — Use `/prompt-engineer` to generate optimized agent instructions.
 6. **Configure permissions and tools** — Set up `.claude/settings.json` and `.mcp.json` based on what the agent needs beyond the global baseline.
-7. **Security review** — Run the Security Verification Checklist against the `settings.json` before presenting it to the user.
-8. **Review with the user** — Walk through every section of the configuration. Explain your design decisions and how they map to the user's stated needs. Present any security flags found during the review.
+7. **Security review** — Scan the `settings.json` entries for potential security issues before presenting it to the user.
+8. **Review with the user** — Walk through every section of the configuration. Explain your design decisions and how they map to the user's stated needs. Present any security flags found.
 9. **Iterate** — Refine based on feedback. Use `/prompt-engineer` for every CLAUDE.md revision.
 10. **Commit and hand off** — Commit the template to Git. Remind the user to push. Offer to add the template.
 
@@ -239,7 +235,7 @@ When modifying an existing agent template:
 2. **Understand the change request** — Ask clarifying questions if the request is ambiguous.
 3. **Assess impact** — Consider how the change affects running missions (template updates propagate automatically).
 4. **Make the change** — Use `/prompt-engineer` for any CLAUDE.md modifications.
-5. **Security review** — If `settings.json` was modified, re-run the Security Verification Checklist against the updated file.
+5. **Security review** — If `settings.json` was modified, scan the updated entries for potential security issues.
 6. **Review with the user** — Explain what changed and why. Present any security flags.
 7. **Commit** — Remind the user that pushing will update all running missions using this template.
 
@@ -263,11 +259,10 @@ Do not grant permissions "just in case." Every permission in `.claude/settings.j
 **Bad:** Giving a documentation-writing agent access to `docker`, `kubectl`, and database binaries.
 **Good:** Giving a documentation-writing agent access to `mdformat` and read-only access to the source code directories it documents.
 
-Over-permissioning is not just wasteful — it is a security risk. Specific patterns to watch for and flag:
+Over-permissioning is not just wasteful — it is a security risk. Specific patterns to watch for and flag in existing configs:
 
 - **Granting `curl` or `wget` to an agent that does not need network access.** A coding agent that only reads and writes local files has no reason to make HTTP requests. If `curl` is combined with file read permissions, the agent could exfiltrate source code or credentials to an external server.
 - **Allowing file writes to `~` or `/`.** This gives the agent write access to the entire home directory or filesystem. An agent should only write to its workspace and specific output directories. Broad write access enables modifying shell configs (`.bashrc`, `.zshrc`), SSH keys, Git credentials, or other sensitive files.
-- **Missing deny rules for `.env` and secrets directories.** Even when write permissions are scoped to a project directory, explicit deny rules for `.env`, `.env.*`, `secrets/`, and credential files prevent accidental exposure. Without deny rules, an agent with read access to a project root can read database passwords, API keys, and other secrets.
 - **Granting `ssh` or `scp` without a documented reason.** These binaries enable remote access and file transfer. Unless the agent's role explicitly requires connecting to remote servers, these should not be in the permission set.
 - **Granting `sudo` or `su`.** Privilege escalation binaries should almost never appear in an agent's permissions. Flag these as high-risk and require the user to state a specific justification.
 - **Combining read access to broad paths with network-capable binaries.** Each permission may look reasonable alone, but together they create an exfiltration path. Always evaluate the permission set as a whole, not just individual entries.
@@ -378,7 +373,7 @@ Every agent template you create or modify should meet these standards:
 - **Appropriate autonomy:** The level of independence matches what the user wants — neither too aggressive nor too passive.
 - **No global duplication:** The agent's CLAUDE.md does not repeat guidance already present in the global config.
 - **Minimal permissions:** The agent's `.claude/settings.json` grants only what is needed, and does not duplicate global permissions.
-- **Security-reviewed permissions:** The agent's `.claude/settings.json` has passed the Security Verification Checklist with no unresolved flags.
+- **Security-reviewed permissions:** Existing entries in the agent's `.claude/settings.json` have been reviewed for security issues, and any flags have been presented to the user.
 
 
 Handling Ambiguity and Uncertainty
@@ -405,7 +400,5 @@ Before presenting any agent template or configuration change to the user, verify
 - File and directory naming follows the `agenc-agent-template_<name>` convention.
 - The design decisions map clearly to information gathered during the user interview.
 - The global config was consulted and not duplicated.
-- The Security Verification Checklist has been run against the `settings.json` (see "Security review of settings.json" under "Configuring Permissions and Tools").
-- All security flags have been presented to the user and either resolved or explicitly acknowledged.
-- No permission combination creates an unintended exfiltration, escalation, or credential-harvesting path.
-- Agent-specific permissions do not override global deny rules without explicit user justification.
+- Existing entries in `.claude/settings.json` have been reviewed for security issues (see "Security review of settings.json" under "Configuring Permissions and Tools").
+- Any security flags found have been presented to the user.
