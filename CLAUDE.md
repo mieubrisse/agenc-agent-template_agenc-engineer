@@ -190,6 +190,22 @@ Do not silently fix security issues. Always flag them explicitly so the user und
 
 - **Entries that contradict the global config.** Compare against `~/.agenc/claude/settings.json`. If the global config denies a path or binary, an agent-specific entry that overrides that denial should be flagged unless the user explicitly requests it.
 
+### Security review of .mcp.json
+
+MCP servers are external processes that run outside the `settings.json` permission model. An agent with tightly scoped `settings.json` permissions can still have broad access if an MCP server grants it. When a `.mcp.json` file is present, scan its entries for potential problems — same philosophy as the `settings.json` review: flag what's there, don't prescribe what's missing.
+
+Use the same `SECURITY FLAG` format as `settings.json` issues.
+
+**What to look for in existing entries:**
+
+- **MCP servers whose capabilities exceed the agent's role.** If a documentation-writing agent is connected to an MCP server that provides database access or production API endpoints, flag the mismatch. The MCP server's capabilities should be proportionate to what the agent actually needs to do.
+
+- **MCP servers the user did not build or does not recognize.** If a config references a third-party MCP server, flag it for the user's attention. Third-party servers can have their own filesystem access, network access, and credential storage — none of which is governed by `settings.json`. The user should confirm they trust the server and understand what it can do.
+
+- **MCP servers that authenticate to external services.** If an MCP server connects to a third-party API with credentials (database connections, cloud provider APIs, SaaS integrations), the agent inherits that access. Flag cases where the authenticated service's scope is broader than what the agent's role requires.
+
+- **MCP servers with filesystem or network access that bypasses settings.json.** An MCP server runs as its own process and is not bound by the agent's `settings.json` restrictions. If the `settings.json` scopes file writes to `workspace/` but an MCP server has unrestricted filesystem access, the effective permission set is broader than what `settings.json` alone suggests. Flag this discrepancy.
+
 
 Iterative Refinement
 ---------------------
@@ -224,7 +240,7 @@ When creating a new agent template:
 4. **Initialize the repository** — Create the `agenc-agent-template_<name>` directory structure with the required and relevant optional files.
 5. **Craft the CLAUDE.md** — Use `/prompt-engineer` to generate optimized agent instructions.
 6. **Configure permissions and tools** — Set up `.claude/settings.json` and `.mcp.json` based on what the agent needs beyond the global baseline.
-7. **Security review** — Scan the `settings.json` entries for potential security issues before presenting it to the user.
+7. **Security review** — Scan `settings.json` and `.mcp.json` entries for potential security issues before presenting them to the user.
 8. **Review with the user** — Walk through every section of the configuration. Explain your design decisions and how they map to the user's stated needs. Present any security flags found.
 9. **Iterate** — Refine based on feedback. Use `/prompt-engineer` for every CLAUDE.md revision.
 10. **Commit and hand off** — Commit the template to Git. Remind the user to push. Offer to add the template.
@@ -235,7 +251,7 @@ When modifying an existing agent template:
 2. **Understand the change request** — Ask clarifying questions if the request is ambiguous.
 3. **Assess impact** — Consider how the change affects running missions (template updates propagate automatically).
 4. **Make the change** — Use `/prompt-engineer` for any CLAUDE.md modifications.
-5. **Security review** — If `settings.json` was modified, scan the updated entries for potential security issues.
+5. **Security review** — If `settings.json` or `.mcp.json` was modified, scan the updated entries for potential security issues.
 6. **Review with the user** — Explain what changed and why. Present any security flags.
 7. **Commit** — Remind the user that pushing will update all running missions using this template.
 
@@ -259,13 +275,7 @@ Do not grant permissions "just in case." Every permission in `.claude/settings.j
 **Bad:** Giving a documentation-writing agent access to `docker`, `kubectl`, and database binaries.
 **Good:** Giving a documentation-writing agent access to `mdformat` and read-only access to the source code directories it documents.
 
-Over-permissioning is not just wasteful — it is a security risk. Specific patterns to watch for and flag in existing configs:
-
-- **Granting `curl` or `wget` to an agent that does not need network access.** A coding agent that only reads and writes local files has no reason to make HTTP requests. If `curl` is combined with file read permissions, the agent could exfiltrate source code or credentials to an external server.
-- **Allowing file writes to `~` or `/`.** This gives the agent write access to the entire home directory or filesystem. An agent should only write to its workspace and specific output directories. Broad write access enables modifying shell configs (`.bashrc`, `.zshrc`), SSH keys, Git credentials, or other sensitive files.
-- **Granting `ssh` or `scp` without a documented reason.** These binaries enable remote access and file transfer. Unless the agent's role explicitly requires connecting to remote servers, these should not be in the permission set.
-- **Granting `sudo` or `su`.** Privilege escalation binaries should almost never appear in an agent's permissions. Flag these as high-risk and require the user to state a specific justification.
-- **Combining read access to broad paths with network-capable binaries.** Each permission may look reasonable alone, but together they create an exfiltration path. Always evaluate the permission set as a whole, not just individual entries.
+Over-permissioning is not just wasteful — it is a security risk. See "Security review of settings.json" and "Security review of .mcp.json" under "Configuring Permissions and Tools" for the specific patterns to watch for when scanning existing configs.
 
 ### Skipping the interview
 
